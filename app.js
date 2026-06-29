@@ -215,11 +215,16 @@ async function handleUpload(e) {
     // Check file type
     const isWebM = videoFile.type === 'video/webm';
     const isMP4 = videoFile.type === 'video/mp4';
+    const skipConversion = document.getElementById('skipConversion').checked;
     
     if (!isWebM && !isMP4) {
         alert('Please select a valid video file (MP4 or WebM)');
         return;
     }
+    
+    // Log conversion settings
+    console.log(`File type: ${isWebM ? 'WebM' : 'MP4'}`);
+    console.log(`Skip conversion: ${skipConversion}`);
 
     // Show loading
     const submitBtn = uploadForm.querySelector('button[type="submit"]');
@@ -230,9 +235,16 @@ async function handleUpload(e) {
     try {
         // Show conversion progress if MP4
         let fileToUpload = videoFile;
-        if (isMP4 && isFFmpegLoaded) {
+        
+        // Convert MP4 to WebM if:
+        // 1. File is MP4
+        // 2. FFmpeg is loaded
+        // 3. User didn't check "skip conversion"
+        if (isMP4 && isFFmpegLoaded && !skipConversion) {
             submitBtn.textContent = 'Converting to WebM...';
             fileToUpload = await convertToWebM(videoFile);
+        } else if (isMP4 && skipConversion) {
+            console.log('Skipping conversion as requested by user');
         }
 
         // Upload video to Supabase Storage
@@ -474,7 +486,7 @@ async function initFFmpeg() {
     }
 }
 
-// Convert MP4 to WebM using FFmpeg WASM
+// Convert MP4 to WebM using FFmpeg WASM with presets
 async function convertToWebM(file) {
     if (!isFFmpegLoaded || !ffmpeg) {
         console.log('FFmpeg not available, using original file');
@@ -483,6 +495,23 @@ async function convertToWebM(file) {
 
     try {
         console.log('Converting MP4 to WebM...');
+        
+        // Get compression preset
+        const preset = document.getElementById('compressionPreset').value;
+        
+        // Configure compression based on preset
+        // Target: 100MB MP4 → X MB WebM
+        const presets = {
+            low: { crf: 20, bitrate: '8M', maxrate: '10M', bufsize: '16M', name: 'Low (5-10MB)' },      // 90-95% compression
+            medium: { crf: 30, bitrate: '2M', maxrate: '3M', bufsize: '6M', name: 'Medium (15-25MB)' }, // 75-85% compression
+            high: { crf: 40, bitrate: '1M', maxrate: '1.5M', bufsize: '3M', name: 'High (30-50MB)' }   // 50-70% compression
+        };
+        
+        const config = presets[preset] || presets.medium;
+        
+        console.log(`Using preset: ${config.name}`);
+        console.log(`CRF: ${config.crf}, Bitrate: ${config.bitrate}`);
+        
         const { createFFmpeg, fetchFile } = FFmpeg;
         
         // Load FFmpeg if not loaded
@@ -493,14 +522,14 @@ async function convertToWebM(file) {
         // Write input file
         ffmpeg.FS('writeFile', file.name, await fetchFile(file));
 
-        // Convert to WebM with VP9 (best compression)
+        // Convert to WebM with VP9 using selected preset
         await ffmpeg.run(
             '-i', file.name,
             '-c:v', 'libvpx-vp9',
-            '-crf', '30',
-            '-b:v', '2M',
-            '-maxrate', '2M',
-            '-bufsize', '4M',
+            '-crf', config.crf,
+            '-b:v', config.bitrate,
+            '-maxrate', config.maxrate,
+            '-bufsize', config.bufsize,
             '-pix_fmt', 'yuv420p',
             '-c:a', 'libopus',
             '-b:a', '128k',
@@ -529,6 +558,7 @@ async function convertToWebM(file) {
         console.log(`  Original: ${originalSize} MB (MP4)`);
         console.log(`  WebM: ${webmSize} MB`);
         console.log(`  Saved: ${saved}%`);
+        console.log(`  Preset: ${config.name}`);
 
         return webmFile;
     } catch (error) {

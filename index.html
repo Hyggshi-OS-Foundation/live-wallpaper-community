@@ -77,6 +77,21 @@
                     <input type="file" id="videoFile" name="videoFile" accept="video/mp4,video/webm" required>
                 </div>
                 <div class="form-group">
+                    <label for="compressionPreset">Compression Preset</label>
+                    <select id="compressionPreset">
+                        <option value="low">Low Compression (5-10MB) - Best Quality</option>
+                        <option value="medium" selected>Medium Compression (15-25MB) - Balanced</option>
+                        <option value="high">High Compression (30-50MB) - Small Size</option>
+                    </select>
+                    <small style="color: #64748b;">Lower compression = better quality, larger file</small>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="skipConversion"> Skip WebM conversion (upload original MP4)
+                    </label>
+                    <small style="color: #64748b;">Check this if conversion fails or you want faster upload</small>
+                </div>
+                <div class="form-group">
                     <label for="thumbnail">Thumbnail (optional)</label>
                     <input type="file" id="thumbnail" name="thumbnail" accept="image/*">
                 </div>
