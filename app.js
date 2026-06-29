@@ -423,7 +423,7 @@ async function handleUpload(e) {
 // ============================================================
 async function convertToWebM(file) {
     try {
-        const { fetchFile } = await import(FFUTIL_CDN);  // fetchFile OK — chỉ dùng để đọc File object, không tạo Worker
+        const { fetchFile } = FFmpeg;  // v0.11 UMD: window.FFmpeg.fetchFile
 
         const preset = document.getElementById('compressionPreset').value;
         const config = PRESETS[preset] || PRESETS.medium;
