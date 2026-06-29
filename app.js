@@ -405,8 +405,6 @@ async function handleUpload(e) {
 // ============================================================
 async function convertToWebM(file) {
     try {
-        const { fetchFile } = FFmpeg;  // v0.11 UMD: window.FFmpeg.fetchFile
-
         const preset = document.getElementById('compressionPreset').value;
         const config = PRESETS[preset] || PRESETS.medium;
 
