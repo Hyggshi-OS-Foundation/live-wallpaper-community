@@ -25,12 +25,17 @@ const filterBtns = document.querySelectorAll('.filter-btn');
 let currentUser = null;
 let currentVideoUrl = null;
 let currentFilter = 'all';
+let ffmpeg = null;
+let isFFmpegLoaded = false;
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     checkSession();
     loadWallpapers();
     setupEventListeners();
+    
+    // Initialize FFmpeg for client-side video conversion
+    await initFFmpeg();
 });
 
 // Check user session
@@ -223,11 +228,18 @@ async function handleUpload(e) {
     submitBtn.disabled = true;
 
     try {
+        // Show conversion progress if MP4
+        let fileToUpload = videoFile;
+        if (isMP4 && isFFmpegLoaded) {
+            submitBtn.textContent = 'Converting to WebM...';
+            fileToUpload = await convertToWebM(videoFile);
+        }
+
         // Upload video to Supabase Storage
-        const videoFileName = `${Date.now()}-${videoFile.name}`;
+        const videoFileName = `${Date.now()}-${fileToUpload.name}`;
         const { data: videoData, error: videoError } = await supabaseClient.storage
             .from('wallpapers')
-            .upload(videoFileName, videoFile, {
+            .upload(videoFileName, fileToUpload, {
                 cacheControl: '3600',
                 upsert: false
             });
@@ -241,9 +253,13 @@ async function handleUpload(e) {
         
         // Log compression info
         const originalSize = (videoFile.size / (1024 * 1024)).toFixed(2);
-        console.log(`Video uploaded: ${videoFile.name}`);
+        const uploadedSize = (fileToUpload.size / (1024 * 1024)).toFixed(2);
+        const format = fileToUpload.name.toLowerCase().endsWith('.webm') ? 'WebM (50% smaller)' : 'MP4';
+        
+        console.log(`Video uploaded: ${fileToUpload.name}`);
         console.log(`Original size: ${originalSize} MB`);
-        console.log(`Format: ${isWebM ? 'WebM (30% smaller)' : 'MP4'}`);
+        console.log(`Uploaded size: ${uploadedSize} MB`);
+        console.log(`Format: ${format}`);
 
         // Upload thumbnail if provided
         let thumbnailUrl = null;
@@ -433,6 +449,93 @@ function fallbackCopyToClipboard(text) {
     }
     
     document.body.removeChild(textArea);
+}
+
+// Initialize FFmpeg for WebM conversion
+async function initFFmpeg() {
+    try {
+        if (typeof FFmpeg !== 'undefined') {
+            const { createFFmpeg, fetchFile } = FFmpeg;
+            ffmpeg = createFFmpeg({ 
+                log: true,
+                progress: ({ ratio }) => {
+                    const percent = Math.round(ratio * 100);
+                    console.log(`Converting: ${percent}%`);
+                }
+            });
+            
+            console.log('FFmpeg loaded, ready to convert MP4 to WebM');
+            isFFmpegLoaded = true;
+        } else {
+            console.warn('FFmpeg not loaded, WebM conversion will use server-side only');
+        }
+    } catch (error) {
+        console.error('Error loading FFmpeg:', error);
+    }
+}
+
+// Convert MP4 to WebM using FFmpeg WASM
+async function convertToWebM(file) {
+    if (!isFFmpegLoaded || !ffmpeg) {
+        console.log('FFmpeg not available, using original file');
+        return file;
+    }
+
+    try {
+        console.log('Converting MP4 to WebM...');
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        
+        // Load FFmpeg if not loaded
+        if (!ffmpeg.isLoaded()) {
+            await ffmpeg.load();
+        }
+
+        // Write input file
+        ffmpeg.FS('writeFile', file.name, await fetchFile(file));
+
+        // Convert to WebM with VP9 (best compression)
+        await ffmpeg.run(
+            '-i', file.name,
+            '-c:v', 'libvpx-vp9',
+            '-crf', '30',
+            '-b:v', '2M',
+            '-maxrate', '2M',
+            '-bufsize', '4M',
+            '-pix_fmt', 'yuv420p',
+            '-c:a', 'libopus',
+            '-b:a', '128k',
+            '-ac', '2',
+            '-ar', '44100',
+            'output.webm'
+        );
+
+        // Read output file
+        const data = ffmpeg.FS('readFile', 'output.webm');
+        
+        // Create new file
+        const webmFile = new File([data.buffer], file.name.replace(/\.[^/.]+$/, '.webm'), {
+            type: 'video/webm'
+        });
+
+        // Cleanup
+        ffmpeg.FS('unlink', file.name);
+        ffmpeg.FS('unlink', 'output.webm');
+
+        const originalSize = (file.size / (1024 * 1024)).toFixed(2);
+        const webmSize = (webmFile.size / (1024 * 1024)).toFixed(2);
+        const saved = Math.round((1 - webmFile.size / file.size) * 100);
+        
+        console.log(`✓ Conversion complete!`);
+        console.log(`  Original: ${originalSize} MB (MP4)`);
+        console.log(`  WebM: ${webmSize} MB`);
+        console.log(`  Saved: ${saved}%`);
+
+        return webmFile;
+    } catch (error) {
+        console.error('Error converting to WebM:', error);
+        alert('WebM conversion failed, uploading original MP4');
+        return file;
+    }
 }
 
 // Handle Like
