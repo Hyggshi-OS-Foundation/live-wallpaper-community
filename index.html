@@ -70,11 +70,26 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="videoFile">Video File (MP4 hoặc WebM, tối đa 500MB)</label>
+                    <label for="videoFile">Video File (MP4 or WebM)</label>
                     <input type="file" id="videoFile" name="videoFile" accept="video/mp4,video/webm" required>
                     <small class="hint" id="fileInfo"></small>
                 </div>
-
+                <div class="form-group" id="conversionOptions">
+                    <label for="compressionPreset">Compression Preset</label>
+                    <select id="compressionPreset">
+                        <option value="low">Low Compression — Best Quality (~50-80% of original)</option>
+                        <option value="medium" selected>Medium — Balanced (~15-25MB per 100MB)</option>
+                        <option value="high">High Compression — Smallest File (~5-10MB per 100MB)</option>
+                    </select>
+                    <small class="hint">Chỉ áp dụng khi upload MP4. WebM giữ nguyên.</small>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="skipConversion">
+                        <span>Bỏ qua chuyển đổi WebM (upload MP4 trực tiếp)</span>
+                    </label>
+                    <small class="hint">Tick nếu muốn upload nhanh hoặc conversion lỗi</small>
+                </div>
                 <div class="form-group">
                     <label for="thumbnail">Thumbnail (optional)</label>
                     <input type="file" id="thumbnail" name="thumbnail" accept="image/*">
