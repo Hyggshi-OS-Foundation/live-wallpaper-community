@@ -42,20 +42,9 @@ let ffmpeg          = null;
 let isFFmpegLoaded  = false;
 
 // ============================================================
-// FFmpeg CDN URLs (v0.12)
+// FFmpeg 0.11.x — UMD build, single-thread, KHÔNG cần SharedArrayBuffer
+// Load qua <script> tag trong index.html
 // ============================================================
-const FFMPEG_CDN   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js';
-const FFUTIL_CDN   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js';
-const FFCORE_BASE  = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
-const FFWORKER_URL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/worker.js';
-
-// Tự fetch URL rồi tạo blob: URL để bypass Worker CORS
-async function urlToBlob(url, mimeType) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Fetch failed: ${url} (${res.status})`);
-    const buf = await res.arrayBuffer();
-    return URL.createObjectURL(new Blob([buf], { type: mimeType }));
-}
 
 // ============================================================
 // Compression Presets
@@ -103,38 +92,34 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ============================================================
 async function initFFmpeg() {
     try {
-        showToast('⏳ Đang tải FFmpeg...', 'info');
+        // FFmpeg 0.11.x UMD được load qua <script> tag → window.FFmpeg global
+        if (typeof FFmpeg === 'undefined' || !FFmpeg.createFFmpeg) {
+            throw new Error('FFmpeg UMD script chưa load');
+        }
 
-        const { FFmpeg } = await import(FFMPEG_CDN);
-        ffmpeg = new FFmpeg();
+        showToast('⏳ Đang tải FFmpeg WASM...', 'info');
 
-        ffmpeg.on('progress', ({ progress }) => {
-            const pct = Math.min(100, Math.round(progress * 100));
-            updateProgress(pct);
+        const { createFFmpeg } = FFmpeg;
+        ffmpeg = createFFmpeg({
+            log: false,
+            progress: ({ ratio }) => {
+                const pct = Math.min(100, Math.round((ratio || 0) * 100));
+                updateProgress(pct);
+            },
+            // corePath: dùng unpkg để tránh CORS jsdelivr
+            corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
         });
 
-        // Fetch tất cả resources về blob: URL trước — bypass Worker CORS hoàn toàn
-        console.log('Fetching FFmpeg resources...');
-        const [coreURL, wasmURL, workerURL] = await Promise.all([
-            urlToBlob(`${FFCORE_BASE}/ffmpeg-core.js`,   'text/javascript'),
-            urlToBlob(`${FFCORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
-            urlToBlob(FFWORKER_URL,                      'text/javascript'),
-        ]);
-
-        await ffmpeg.load({ coreURL, wasmURL, workerURL });
+        await ffmpeg.load();
 
         isFFmpegLoaded = true;
         showToast('✅ FFmpeg sẵn sàng — hỗ trợ chuyển đổi WebM', 'success');
-        console.log('✅ FFmpeg 0.12 loaded');
+        console.log('✅ FFmpeg 0.11 loaded (single-thread, no SharedArrayBuffer needed)');
 
     } catch (err) {
         isFFmpegLoaded = false;
         console.error('FFmpeg load failed:', err);
-        if (!crossOriginIsolated) {
-            showToast('⚠️ Thiếu COOP/COEP headers — kiểm tra file _headers trên Cloudflare Pages', 'warning', 7000);
-        } else {
-            showToast('⚠️ FFmpeg không tải được. Sẽ upload file gốc.', 'warning');
-        }
+        showToast('⚠️ FFmpeg không tải được — sẽ upload file gốc thay thế', 'warning', 5000);
     }
 }
 
