@@ -41,10 +41,7 @@ let currentFilter   = 'all';
 let ffmpeg          = null;
 let isFFmpegLoaded  = false;
 
-// ============================================================
-// FFmpeg 0.11.x — UMD build, single-thread, KHÔNG cần SharedArrayBuffer
-// Load qua <script> tag trong index.html
-// ============================================================
+
 
 // ============================================================
 // Compression Presets
@@ -88,38 +85,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // ============================================================
-// FFmpeg Init (v0.12 ESM dynamic import)
+// Video compression via MediaRecorder (no WASM, no SharedArrayBuffer)
 // ============================================================
 async function initFFmpeg() {
-    try {
-        // FFmpeg 0.11.x UMD được load qua <script> tag → window.FFmpeg global
-        if (typeof FFmpeg === 'undefined' || !FFmpeg.createFFmpeg) {
-            throw new Error('FFmpeg UMD script chưa load');
-        }
+    // Kiểm tra MediaRecorder + WebM support
+    const supported = typeof MediaRecorder !== 'undefined' &&
+        (MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ||
+         MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ||
+         MediaRecorder.isTypeSupported('video/webm'));
 
-        showToast('⏳ Đang tải FFmpeg WASM...', 'info');
-
-        const { createFFmpeg } = FFmpeg;
-        ffmpeg = createFFmpeg({
-            log: false,
-            progress: ({ ratio }) => {
-                const pct = Math.min(100, Math.round((ratio || 0) * 100));
-                updateProgress(pct);
-            },
-            // corePath: dùng unpkg để tránh CORS jsdelivr
-            corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
-        });
-
-        await ffmpeg.load();
-
+    if (supported) {
         isFFmpegLoaded = true;
-        showToast('✅ FFmpeg sẵn sàng — hỗ trợ chuyển đổi WebM', 'success');
-        console.log('✅ FFmpeg 0.11 loaded (single-thread, no SharedArrayBuffer needed)');
-
-    } catch (err) {
+        console.log('✅ MediaRecorder WebM supported');
+        showToast('✅ Hỗ trợ chuyển đổi WebM qua trình duyệt', 'success', 3000);
+    } else {
         isFFmpegLoaded = false;
-        console.error('FFmpeg load failed:', err);
-        showToast('⚠️ FFmpeg không tải được — sẽ upload file gốc thay thế', 'warning', 5000);
+        console.warn('⚠️ MediaRecorder WebM not supported, will upload original');
+        showToast('⚠️ Trình duyệt không hỗ trợ WebM — sẽ upload file gốc', 'warning', 4000);
     }
 }
 

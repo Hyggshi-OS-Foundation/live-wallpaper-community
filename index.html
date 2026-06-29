@@ -5,9 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live Wallpaper Community</title>
 
-    <!-- COOP/COEP required for FFmpeg SharedArrayBuffer -->
-    <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
-    <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
 
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://udaniwuafagvftgsnslb.supabase.co">
@@ -157,8 +154,6 @@
     <div id="ffmpegToast" class="toast" style="display:none"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <!-- FFmpeg 0.11 UMD — single-thread, không cần SharedArrayBuffer hay COOP/COEP -->
-    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
