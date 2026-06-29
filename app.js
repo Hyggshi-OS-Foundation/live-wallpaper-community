@@ -401,66 +401,79 @@ async function handleUpload(e) {
 }
 
 // ============================================================
-// FFmpeg WebM Conversion (v0.12 API)
+// WebM Conversion via MediaRecorder (pure browser, no WASM)
+// Preset → videoBitsPerSecond:
+//   low    = 4 Mbps  → ~50-80MB từ 100MB MP4
+//   medium = 1.5 Mbps → ~15-25MB
+//   high   = 500 Kbps → ~5-10MB
 // ============================================================
-async function convertToWebM(file) {
-    try {
-        const preset = document.getElementById('compressionPreset').value;
-        const config = PRESETS[preset] || PRESETS.medium;
+function convertToWebM(file) {
+    return new Promise((resolve) => {
+        const preset  = document.getElementById('compressionPreset').value;
+        const bpsMap  = { low: 4_000_000, medium: 1_500_000, high: 500_000 };
+        const videoBps = bpsMap[preset] || bpsMap.medium;
+        const origMB  = (file.size / 1024 / 1024).toFixed(1);
 
-        const origMB = (file.size / 1024 / 1024).toFixed(1);
-        console.log(`🎬 Converting "${file.name}" (${origMB} MB) — preset: ${config.label}`);
-        console.log(`   CRF=${config.crf}  cpu-used=${config.cpu}`);
+        console.log('🎬 Converting via MediaRecorder preset:', preset, videoBps + 'bps');
 
-        const INPUT  = 'input.mp4';
-        const OUTPUT = 'output.webm';
+        const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+            .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
 
-        ffmpeg.FS('writeFile', INPUT, await fetchFile(file));
+        const videoEl = document.createElement('video');
+        videoEl.src = URL.createObjectURL(file);
+        videoEl.muted = true;
+        videoEl.playsInline = true;
 
-        await ffmpeg.run(
-            '-i',        INPUT,
-            '-c:v',      'libvpx-vp9',
-            '-crf',      config.crf,
-            '-b:v',      config.b_v,          // '0' = CRF-only mode (không giới hạn bitrate)
-            '-deadline', 'realtime',           // nhanh hơn 'good' / 'best'
-            '-cpu-used', config.cpu,           // 0=slowest+best → 8=fastest+worst
-            '-row-mt',   '1',                  // multi-thread row encoding
-            '-pix_fmt',  'yuv420p',
-            '-c:a',      'libopus',
-            '-b:a',      '96k',
-            '-ac',       '2',
-            '-f',        'webm',
-            OUTPUT
-        );
+        videoEl.onloadedmetadata = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width  = videoEl.videoWidth  || 1280;
+            canvas.height = videoEl.videoHeight || 720;
+            const ctx = canvas.getContext('2d');
 
-        const data = ffmpeg.FS('readFile', OUTPUT);
+            const stream   = canvas.captureStream(30);
+            const recorder = new MediaRecorder(stream, {
+                mimeType: mime,
+                videoBitsPerSecond: videoBps,
+            });
 
-        // Cleanup WASM FS
-        try { ffmpeg.FS('unlink', INPUT);  } catch (_) {}
-        try { ffmpeg.FS('unlink', OUTPUT); } catch (_) {}
+            const chunks = [];
+            recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
-        const webmFile = new File(
-            [data.buffer],
-            file.name.replace(/\.[^.]+$/, '.webm'),
-            { type: 'video/webm' }
-        );
+            recorder.onstop = () => {
+                URL.revokeObjectURL(videoEl.src);
+                const blob     = new Blob(chunks, { type: mime });
+                const webmFile = new File([blob], file.name.replace(/\.[^.]+$/, '.webm'), { type: 'video/webm' });
+                const webmMB   = (webmFile.size / 1024 / 1024).toFixed(1);
+                const saved    = Math.round((1 - webmFile.size / file.size) * 100);
+                console.log('✅ Done!', origMB + 'MB →', webmMB + 'MB (-' + saved + '%)');
+                showToast('✅ Xong! ' + origMB + 'MB → ' + webmMB + 'MB (giảm ' + saved + '%)', 'success', 5000);
+                resolve(webmFile);
+            };
 
-        const webmMB = (webmFile.size / 1024 / 1024).toFixed(1);
-        const saved  = Math.round((1 - webmFile.size / file.size) * 100);
+            recorder.onerror = () => {
+                URL.revokeObjectURL(videoEl.src);
+                showToast('⚠️ Chuyển đổi thất bại, upload file gốc', 'warning', 4000);
+                resolve(file);
+            };
 
-        console.log(`✅ Conversion done!`);
-        console.log(`   MP4 gốc : ${origMB} MB`);
-        console.log(`   WebM    : ${webmMB} MB`);
-        console.log(`   Giảm    : ${saved}%`);
-        showToast(`✅ Chuyển đổi xong! ${origMB}MB → ${webmMB}MB (giảm ${saved}%)`, 'success', 5000);
+            const drawFrame = () => {
+                if (videoEl.ended || videoEl.paused) return;
+                ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+                if (videoEl.duration) {
+                    updateProgress(Math.round((videoEl.currentTime / videoEl.duration) * 100));
+                }
+                requestAnimationFrame(drawFrame);
+            };
 
-        return webmFile;
+            videoEl.onplay  = () => { recorder.start(100); drawFrame(); };
+            videoEl.onended = () => recorder.stop();
+            videoEl.onerror = () => { URL.revokeObjectURL(videoEl.src); resolve(file); };
 
-    } catch (err) {
-        console.error('❌ Conversion failed:', err);
-        showToast(`⚠️ Chuyển đổi thất bại: ${err.message}. Sẽ upload MP4 gốc.`, 'warning', 5000);
-        return file;   // fallback: trả về file gốc
-    }
+            videoEl.play().catch(() => resolve(file));
+        };
+
+        videoEl.onerror = () => resolve(file);
+    });
 }
 
 // ============================================================
