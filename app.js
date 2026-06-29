@@ -178,7 +178,15 @@ function displayWallpapers(wallpapers) {
 // Open Video Modal
 function openVideoModal(wallpaper) {
     currentVideoUrl = wallpaper.video_url;
-    videoPlayer.querySelector('source').src = wallpaper.video_url;
+    
+    // Determine video type
+    const videoType = wallpaper.video_url.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4';
+    
+    // Update video source
+    const source = videoPlayer.querySelector('source');
+    source.src = wallpaper.video_url;
+    source.type = videoType;
+    
     videoTitle.textContent = wallpaper.title;
     videoCategory.textContent = wallpaper.category;
     videoModal.classList.add('active');
@@ -196,6 +204,15 @@ async function handleUpload(e) {
 
     if (!videoFile) {
         alert('Please select a video file');
+        return;
+    }
+
+    // Check file type
+    const isWebM = videoFile.type === 'video/webm';
+    const isMP4 = videoFile.type === 'video/mp4';
+    
+    if (!isWebM && !isMP4) {
+        alert('Please select a valid video file (MP4 or WebM)');
         return;
     }
 
@@ -221,6 +238,12 @@ async function handleUpload(e) {
         const { data: { publicUrl: videoUrl } } = supabaseClient.storage
             .from('wallpapers')
             .getPublicUrl(videoFileName);
+        
+        // Log compression info
+        const originalSize = (videoFile.size / (1024 * 1024)).toFixed(2);
+        console.log(`Video uploaded: ${videoFile.name}`);
+        console.log(`Original size: ${originalSize} MB`);
+        console.log(`Format: ${isWebM ? 'WebM (30% smaller)' : 'MP4'}`);
 
         // Upload thumbnail if provided
         let thumbnailUrl = null;
