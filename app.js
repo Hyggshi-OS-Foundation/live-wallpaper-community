@@ -42,11 +42,20 @@ let ffmpeg          = null;
 let isFFmpegLoaded  = false;
 
 // ============================================================
-// FFmpeg CDN URLs (v0.12 — stable, supports VP9/WebM)
+// FFmpeg CDN URLs (v0.12)
 // ============================================================
 const FFMPEG_CDN   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js';
 const FFUTIL_CDN   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js';
 const FFCORE_BASE  = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+const FFWORKER_URL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/worker.js';
+
+// Tự fetch URL rồi tạo blob: URL để bypass Worker CORS
+async function urlToBlob(url, mimeType) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Fetch failed: ${url} (${res.status})`);
+    const buf = await res.arrayBuffer();
+    return URL.createObjectURL(new Blob([buf], { type: mimeType }));
+}
 
 // ============================================================
 // Compression Presets
@@ -96,22 +105,23 @@ async function initFFmpeg() {
     try {
         showToast('⏳ Đang tải FFmpeg...', 'info');
 
-        const { FFmpeg }    = await import(FFMPEG_CDN);
-        const { toBlobURL } = await import(FFUTIL_CDN);
-
+        const { FFmpeg } = await import(FFMPEG_CDN);
         ffmpeg = new FFmpeg();
 
-        // Progress callback
         ffmpeg.on('progress', ({ progress }) => {
             const pct = Math.min(100, Math.round(progress * 100));
             updateProgress(pct);
         });
 
-        // Load core WASM
-        await ffmpeg.load({
-            coreURL : await toBlobURL(`${FFCORE_BASE}/ffmpeg-core.js`,   'text/javascript'),
-            wasmURL : await toBlobURL(`${FFCORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
-        });
+        // Fetch tất cả resources về blob: URL trước — bypass Worker CORS hoàn toàn
+        console.log('Fetching FFmpeg resources...');
+        const [coreURL, wasmURL, workerURL] = await Promise.all([
+            urlToBlob(`${FFCORE_BASE}/ffmpeg-core.js`,   'text/javascript'),
+            urlToBlob(`${FFCORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
+            urlToBlob(FFWORKER_URL,                      'text/javascript'),
+        ]);
+
+        await ffmpeg.load({ coreURL, wasmURL, workerURL });
 
         isFFmpegLoaded = true;
         showToast('✅ FFmpeg sẵn sàng — hỗ trợ chuyển đổi WebM', 'success');
@@ -120,10 +130,8 @@ async function initFFmpeg() {
     } catch (err) {
         isFFmpegLoaded = false;
         console.error('FFmpeg load failed:', err);
-
-        // Cloudflare Pages cần _headers file để bật SharedArrayBuffer
         if (!crossOriginIsolated) {
-            showToast('⚠️ FFmpeg không tải được do thiếu COOP/COEP headers. Xem hướng dẫn _headers.', 'warning', 6000);
+            showToast('⚠️ Thiếu COOP/COEP headers — kiểm tra file _headers trên Cloudflare Pages', 'warning', 7000);
         } else {
             showToast('⚠️ FFmpeg không tải được. Sẽ upload file gốc.', 'warning');
         }
@@ -430,7 +438,7 @@ async function handleUpload(e) {
 // ============================================================
 async function convertToWebM(file) {
     try {
-        const { fetchFile } = await import(FFUTIL_CDN);
+        const { fetchFile } = await import(FFUTIL_CDN);  // fetchFile OK — chỉ dùng để đọc File object, không tạo Worker
 
         const preset = document.getElementById('compressionPreset').value;
         const config = PRESETS[preset] || PRESETS.medium;
