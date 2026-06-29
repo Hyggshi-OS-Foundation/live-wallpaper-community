@@ -435,9 +435,9 @@ async function convertToWebM(file) {
         const INPUT  = 'input.mp4';
         const OUTPUT = 'output.webm';
 
-        await ffmpeg.writeFile(INPUT, await fetchFile(file));
+        ffmpeg.FS('writeFile', INPUT, await fetchFile(file));
 
-        await ffmpeg.exec([
+        await ffmpeg.run(
             '-i',        INPUT,
             '-c:v',      'libvpx-vp9',
             '-crf',      config.crf,
@@ -450,14 +450,14 @@ async function convertToWebM(file) {
             '-b:a',      '96k',
             '-ac',       '2',
             '-f',        'webm',
-            OUTPUT,
-        ]);
+            OUTPUT
+        );
 
-        const data = await ffmpeg.readFile(OUTPUT);
+        const data = ffmpeg.FS('readFile', OUTPUT);
 
         // Cleanup WASM FS
-        try { await ffmpeg.deleteFile(INPUT);  } catch (_) {}
-        try { await ffmpeg.deleteFile(OUTPUT); } catch (_) {}
+        try { ffmpeg.FS('unlink', INPUT);  } catch (_) {}
+        try { ffmpeg.FS('unlink', OUTPUT); } catch (_) {}
 
         const webmFile = new File(
             [data.buffer],
