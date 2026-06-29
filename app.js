@@ -43,36 +43,7 @@ let isFFmpegLoaded  = false;
 
 
 
-// ============================================================
-// Compression Presets
-// CRF VP9: 0=lossless, 63=worst. Lower CRF = bigger file / better quality.
-// -b:v 0 để VP9 dùng CRF mode thuần (không giới hạn bitrate)
-// ============================================================
-const PRESETS = {
-    low: {
-        // Low compression = chất lượng cao = file to
-        // 100MB MP4 → ~50–80MB WebM
-        label : 'Low Compression (best quality)',
-        crf   : '20',
-        b_v   : '0',
-        cpu   : '4',    // 0=slowest/best, 8=fastest/worst — balance giữa tốc độ & chất lượng
-    },
-    medium: {
-        // 100MB MP4 → ~15–25MB WebM
-        label : 'Medium (balanced)',
-        crf   : '33',
-        b_v   : '0',
-        cpu   : '6',
-    },
-    high: {
-        // High compression = chất lượng thấp = file nhỏ
-        // 100MB MP4 → ~5–10MB WebM
-        label : 'High Compression (smallest)',
-        crf   : '50',
-        b_v   : '0',
-        cpu   : '8',
-    },
-};
+
 
 // ============================================================
 // Initialize
@@ -85,24 +56,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // ============================================================
-// Video compression via MediaRecorder (no WASM, no SharedArrayBuffer)
+// No client-side conversion — upload MP4 directly
 // ============================================================
 async function initFFmpeg() {
-    // Kiểm tra MediaRecorder + WebM support
-    const supported = typeof MediaRecorder !== 'undefined' &&
-        (MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ||
-         MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ||
-         MediaRecorder.isTypeSupported('video/webm'));
-
-    if (supported) {
-        isFFmpegLoaded = true;
-        console.log('✅ MediaRecorder WebM supported');
-        showToast('✅ Hỗ trợ chuyển đổi WebM qua trình duyệt', 'success', 3000);
-    } else {
-        isFFmpegLoaded = false;
-        console.warn('⚠️ MediaRecorder WebM not supported, will upload original');
-        showToast('⚠️ Trình duyệt không hỗ trợ WebM — sẽ upload file gốc', 'warning', 4000);
-    }
+    // Không convert — upload thẳng MP4
+    isFFmpegLoaded = false;
 }
 
 // ============================================================
@@ -205,10 +163,6 @@ function setupEventListeners() {
         }
     });
 
-    // Ẩn/hiện tùy chọn conversion khi skip được tick
-    document.getElementById('skipConversion').addEventListener('change', e => {
-        document.getElementById('conversionOptions').style.opacity = e.target.checked ? '0.4' : '1';
-    });
 }
 
 // ============================================================
@@ -309,14 +263,11 @@ async function handleUpload(e) {
     const category      = document.getElementById('category').value;
     const videoFile     = document.getElementById('videoFile').files[0];
     const thumbnailFile = document.getElementById('thumbnail').files[0];
-    const skipConvert   = document.getElementById('skipConversion').checked;
 
     if (!videoFile) { alert('Vui lòng chọn file video'); return; }
 
-    const isWebM = videoFile.type === 'video/webm';
-    const isMP4  = videoFile.type === 'video/mp4';
-
-    if (!isWebM && !isMP4) {
+    const validTypes = ['video/mp4', 'video/webm', 'video/quicktime'];
+    if (!validTypes.includes(videoFile.type) && !videoFile.name.match(/\.(mp4|webm|mov)$/i)) {
         alert('Chỉ chấp nhận file MP4 hoặc WebM');
         return;
     }
@@ -327,19 +278,6 @@ async function handleUpload(e) {
 
     try {
         let fileToUpload = videoFile;
-
-        // Convert MP4 → WebM nếu: file là MP4, FFmpeg sẵn sàng, người dùng không skip
-        if (isMP4 && !skipConvert) {
-            if (isFFmpegLoaded) {
-                showProgress('Đang chuyển đổi MP4 → WebM...');
-                submitBtn.textContent = 'Đang chuyển đổi...';
-                fileToUpload = await convertToWebM(videoFile);
-                hideProgress();
-            } else {
-                console.warn('FFmpeg chưa sẵn sàng, upload MP4 gốc');
-                showToast('FFmpeg chưa load xong, upload file MP4 gốc', 'warning');
-            }
-        }
 
         // Upload video
         submitBtn.textContent = 'Đang upload video...';
@@ -400,81 +338,8 @@ async function handleUpload(e) {
     }
 }
 
-// ============================================================
-// WebM Conversion via MediaRecorder (pure browser, no WASM)
-// Preset → videoBitsPerSecond:
-//   low    = 4 Mbps  → ~50-80MB từ 100MB MP4
-//   medium = 1.5 Mbps → ~15-25MB
-//   high   = 500 Kbps → ~5-10MB
-// ============================================================
-function convertToWebM(file) {
-    return new Promise((resolve) => {
-        const preset  = document.getElementById('compressionPreset').value;
-        const bpsMap  = { low: 4_000_000, medium: 1_500_000, high: 500_000 };
-        const videoBps = bpsMap[preset] || bpsMap.medium;
-        const origMB  = (file.size / 1024 / 1024).toFixed(1);
-
-        console.log('🎬 Converting via MediaRecorder preset:', preset, videoBps + 'bps');
-
-        const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
-            .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
-
-        const videoEl = document.createElement('video');
-        videoEl.src = URL.createObjectURL(file);
-        videoEl.muted = true;
-        videoEl.playsInline = true;
-
-        videoEl.onloadedmetadata = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width  = videoEl.videoWidth  || 1280;
-            canvas.height = videoEl.videoHeight || 720;
-            const ctx = canvas.getContext('2d');
-
-            const stream   = canvas.captureStream(30);
-            const recorder = new MediaRecorder(stream, {
-                mimeType: mime,
-                videoBitsPerSecond: videoBps,
-            });
-
-            const chunks = [];
-            recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-
-            recorder.onstop = () => {
-                URL.revokeObjectURL(videoEl.src);
-                const blob     = new Blob(chunks, { type: mime });
-                const webmFile = new File([blob], file.name.replace(/\.[^.]+$/, '.webm'), { type: 'video/webm' });
-                const webmMB   = (webmFile.size / 1024 / 1024).toFixed(1);
-                const saved    = Math.round((1 - webmFile.size / file.size) * 100);
-                console.log('✅ Done!', origMB + 'MB →', webmMB + 'MB (-' + saved + '%)');
-                showToast('✅ Xong! ' + origMB + 'MB → ' + webmMB + 'MB (giảm ' + saved + '%)', 'success', 5000);
-                resolve(webmFile);
-            };
-
-            recorder.onerror = () => {
-                URL.revokeObjectURL(videoEl.src);
-                showToast('⚠️ Chuyển đổi thất bại, upload file gốc', 'warning', 4000);
-                resolve(file);
-            };
-
-            const drawFrame = () => {
-                if (videoEl.ended || videoEl.paused) return;
-                ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-                if (videoEl.duration) {
-                    updateProgress(Math.round((videoEl.currentTime / videoEl.duration) * 100));
-                }
-                requestAnimationFrame(drawFrame);
-            };
-
-            videoEl.onplay  = () => { recorder.start(100); drawFrame(); };
-            videoEl.onended = () => recorder.stop();
-            videoEl.onerror = () => { URL.revokeObjectURL(videoEl.src); resolve(file); };
-
-            videoEl.play().catch(() => resolve(file));
-        };
-
-        videoEl.onerror = () => resolve(file);
-    });
-}
+// placeholder — không dùng
+function convertToWebM(file) { return Promise.resolve(file); }
 
 // ============================================================
 // Auth
