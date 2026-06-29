@@ -1,44 +1,169 @@
+// ============================================================
 // Supabase Configuration
+// ============================================================
 const SUPABASE_URL = 'https://udaniwuafagvftgsnslb.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVkYW5pd3VhZmFndmZ0Z3Nuc2xiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NDUwNTUsImV4cCI6MjA5ODIyMTA1NX0.uqDko_JfAJIhzs1NcU2ygbW6cYKt26f2w3lf4ngwkKY';
 
-// Create Supabase client (use different variable name to avoid conflict)
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ============================================================
 // DOM Elements
+// ============================================================
 const wallpaperContainer = document.getElementById('wallpaperContainer');
-const uploadBtn = document.getElementById('uploadBtn');
-const loginBtn = document.getElementById('loginBtn');
-const uploadModal = document.getElementById('uploadModal');
-const videoModal = document.getElementById('videoModal');
-const loginModal = document.getElementById('loginModal');
-const uploadForm = document.getElementById('uploadForm');
-const loginForm = document.getElementById('loginForm');
-const videoPlayer = document.getElementById('videoPlayer');
-const videoTitle = document.getElementById('videoTitle');
-const videoCategory = document.getElementById('videoCategory');
-const downloadBtn = document.getElementById('downloadBtn');
-const shareBtn = document.getElementById('shareBtn');
-const likeBtn = document.getElementById('likeBtn');
-const filterBtns = document.querySelectorAll('.filter-btn');
+const uploadBtn          = document.getElementById('uploadBtn');
+const loginBtn           = document.getElementById('loginBtn');
+const uploadModal        = document.getElementById('uploadModal');
+const videoModal         = document.getElementById('videoModal');
+const loginModal         = document.getElementById('loginModal');
+const uploadForm         = document.getElementById('uploadForm');
+const loginForm          = document.getElementById('loginForm');
+const videoPlayer        = document.getElementById('videoPlayer');
+const videoTitle         = document.getElementById('videoTitle');
+const videoCategory      = document.getElementById('videoCategory');
+const downloadBtn        = document.getElementById('downloadBtn');
+const shareBtn           = document.getElementById('shareBtn');
+const likeBtn            = document.getElementById('likeBtn');
+const filterBtns         = document.querySelectorAll('.filter-btn');
+const submitBtn          = document.getElementById('submitBtn');
+const progressWrap       = document.getElementById('conversionProgress');
+const progressFill       = document.getElementById('progressFill');
+const progressText       = document.getElementById('progressText');
+const progressPercent    = document.getElementById('progressPercent');
+const ffmpegToast        = document.getElementById('ffmpegToast');
+const fileInfo           = document.getElementById('fileInfo');
 
-let currentUser = null;
+// ============================================================
+// State
+// ============================================================
+let currentUser     = null;
 let currentVideoUrl = null;
-let currentFilter = 'all';
-let ffmpeg = null;
-let isFFmpegLoaded = false;
+let currentFilter   = 'all';
+let ffmpeg          = null;
+let isFFmpegLoaded  = false;
 
+// ============================================================
+// FFmpeg CDN URLs (v0.12 — stable, supports VP9/WebM)
+// ============================================================
+const FFMPEG_CDN   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js';
+const FFUTIL_CDN   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js';
+const FFCORE_BASE  = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+
+// ============================================================
+// Compression Presets
+// CRF VP9: 0=lossless, 63=worst. Lower CRF = bigger file / better quality.
+// -b:v 0 để VP9 dùng CRF mode thuần (không giới hạn bitrate)
+// ============================================================
+const PRESETS = {
+    low: {
+        // Low compression = chất lượng cao = file to
+        // 100MB MP4 → ~50–80MB WebM
+        label : 'Low Compression (best quality)',
+        crf   : '20',
+        b_v   : '0',
+        cpu   : '4',    // 0=slowest/best, 8=fastest/worst — balance giữa tốc độ & chất lượng
+    },
+    medium: {
+        // 100MB MP4 → ~15–25MB WebM
+        label : 'Medium (balanced)',
+        crf   : '33',
+        b_v   : '0',
+        cpu   : '6',
+    },
+    high: {
+        // High compression = chất lượng thấp = file nhỏ
+        // 100MB MP4 → ~5–10MB WebM
+        label : 'High Compression (smallest)',
+        crf   : '50',
+        b_v   : '0',
+        cpu   : '8',
+    },
+};
+
+// ============================================================
 // Initialize
+// ============================================================
 document.addEventListener('DOMContentLoaded', async () => {
     checkSession();
     loadWallpapers();
     setupEventListeners();
-    
-    // Initialize FFmpeg for client-side video conversion
-    await initFFmpeg();
+    initFFmpeg();   // không await — load nền
 });
 
-// Check user session
+// ============================================================
+// FFmpeg Init (v0.12 ESM dynamic import)
+// ============================================================
+async function initFFmpeg() {
+    try {
+        showToast('⏳ Đang tải FFmpeg...', 'info');
+
+        const { FFmpeg }    = await import(FFMPEG_CDN);
+        const { toBlobURL } = await import(FFUTIL_CDN);
+
+        ffmpeg = new FFmpeg();
+
+        // Progress callback
+        ffmpeg.on('progress', ({ progress }) => {
+            const pct = Math.min(100, Math.round(progress * 100));
+            updateProgress(pct);
+        });
+
+        // Load core WASM
+        await ffmpeg.load({
+            coreURL : await toBlobURL(`${FFCORE_BASE}/ffmpeg-core.js`,   'text/javascript'),
+            wasmURL : await toBlobURL(`${FFCORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
+        });
+
+        isFFmpegLoaded = true;
+        showToast('✅ FFmpeg sẵn sàng — hỗ trợ chuyển đổi WebM', 'success');
+        console.log('✅ FFmpeg 0.12 loaded');
+
+    } catch (err) {
+        isFFmpegLoaded = false;
+        console.error('FFmpeg load failed:', err);
+
+        // Cloudflare Pages cần _headers file để bật SharedArrayBuffer
+        if (!crossOriginIsolated) {
+            showToast('⚠️ FFmpeg không tải được do thiếu COOP/COEP headers. Xem hướng dẫn _headers.', 'warning', 6000);
+        } else {
+            showToast('⚠️ FFmpeg không tải được. Sẽ upload file gốc.', 'warning');
+        }
+    }
+}
+
+// ============================================================
+// Toast helper
+// ============================================================
+function showToast(msg, type = 'info', duration = 3500) {
+    ffmpegToast.textContent = msg;
+    ffmpegToast.className = `toast toast-${type}`;
+    ffmpegToast.style.display = 'block';
+    clearTimeout(ffmpegToast._timer);
+    ffmpegToast._timer = setTimeout(() => {
+        ffmpegToast.style.display = 'none';
+    }, duration);
+}
+
+// ============================================================
+// Progress bar helpers
+// ============================================================
+function showProgress(label) {
+    progressWrap.style.display = 'block';
+    progressText.textContent   = label || 'Đang xử lý...';
+    updateProgress(0);
+}
+
+function updateProgress(pct) {
+    progressFill.style.width    = pct + '%';
+    progressPercent.textContent = pct + '%';
+}
+
+function hideProgress() {
+    progressWrap.style.display = 'none';
+}
+
+// ============================================================
+// Session
+// ============================================================
 async function checkSession() {
     const { data: { session } } = await supabaseClient.auth.getSession();
     if (session) {
@@ -47,54 +172,40 @@ async function checkSession() {
     }
 }
 
-// Setup Event Listeners
+// ============================================================
+// Event Listeners
+// ============================================================
 function setupEventListeners() {
-    // Upload Modal
     uploadBtn.addEventListener('click', () => {
         if (!currentUser) {
-            alert('Please login to upload wallpapers');
+            alert('Vui lòng đăng nhập để upload wallpaper');
             loginModal.classList.add('active');
             return;
         }
         uploadModal.classList.add('active');
     });
 
-    // Login Modal
     loginBtn.addEventListener('click', () => {
-        if (currentUser) {
-            handleLogout();
-        } else {
-            loginModal.classList.add('active');
-        }
+        if (currentUser) handleLogout();
+        else loginModal.classList.add('active');
     });
 
-    // Close Modals
-    document.querySelectorAll('.close').forEach(closeBtn => {
-        closeBtn.addEventListener('click', (e) => {
-            e.target.closest('.modal').classList.remove('active');
-        });
+    document.querySelectorAll('.close').forEach(btn => {
+        btn.addEventListener('click', e => e.target.closest('.modal').classList.remove('active'));
     });
 
-    // Close modal on outside click
-    window.addEventListener('click', (e) => {
-        if (e.target.classList.contains('modal')) {
-            e.target.classList.remove('active');
-        }
+    window.addEventListener('click', e => {
+        if (e.target.classList.contains('modal')) e.target.classList.remove('active');
     });
 
-    // Upload Form
     uploadForm.addEventListener('submit', handleUpload);
-
-    // Login Form
     loginForm.addEventListener('submit', handleLogin);
 
-    // Switch to Signup
-    document.getElementById('switchToSignup').addEventListener('click', (e) => {
+    document.getElementById('switchToSignup').addEventListener('click', e => {
         e.preventDefault();
         handleSignup();
     });
 
-    // Filter Buttons
     filterBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             filterBtns.forEach(b => b.classList.remove('active'));
@@ -104,19 +215,32 @@ function setupEventListeners() {
         });
     });
 
-    // Download Button
     downloadBtn.addEventListener('click', handleDownload);
-
-    // Share Button
     shareBtn.addEventListener('click', handleShare);
-
-    // Like Button
     likeBtn.addEventListener('click', handleLike);
+
+    // Hiện file size khi chọn file
+    document.getElementById('videoFile').addEventListener('change', e => {
+        const f = e.target.files[0];
+        if (f) {
+            const mb = (f.size / 1024 / 1024).toFixed(1);
+            fileInfo.textContent = `${f.name} — ${mb} MB`;
+        } else {
+            fileInfo.textContent = '';
+        }
+    });
+
+    // Ẩn/hiện tùy chọn conversion khi skip được tick
+    document.getElementById('skipConversion').addEventListener('change', e => {
+        document.getElementById('conversionOptions').style.opacity = e.target.checked ? '0.4' : '1';
+    });
 }
 
-// Load Wallpapers
+// ============================================================
+// Load & Display Wallpapers
+// ============================================================
 async function loadWallpapers() {
-    wallpaperContainer.innerHTML = '<div class="loading">Loading wallpapers...</div>';
+    wallpaperContainer.innerHTML = '<div class="loading">Đang tải wallpaper...</div>';
 
     let query = supabaseClient
         .from('wallpapers')
@@ -131,31 +255,35 @@ async function loadWallpapers() {
 
     if (error) {
         console.error('Error loading wallpapers:', error);
-        wallpaperContainer.innerHTML = '<div class="empty-state"><h3>Error loading wallpapers</h3><p>Please try again later</p></div>';
+        wallpaperContainer.innerHTML = '<div class="empty-state"><h3>Lỗi tải wallpaper</h3><p>Vui lòng thử lại</p></div>';
         return;
     }
 
-    if (wallpapers.length === 0) {
-        wallpaperContainer.innerHTML = '<div class="empty-state"><h3>No wallpapers found</h3><p>Be the first to upload!</p></div>';
+    if (!wallpapers || wallpapers.length === 0) {
+        wallpaperContainer.innerHTML = '<div class="empty-state"><h3>Chưa có wallpaper nào</h3><p>Hãy là người đầu tiên upload!</p></div>';
         return;
     }
 
     displayWallpapers(wallpapers);
 }
 
-// Display Wallpapers
 function displayWallpapers(wallpapers) {
     wallpaperContainer.innerHTML = '';
 
     wallpapers.forEach(wallpaper => {
         const card = document.createElement('div');
         card.className = 'wallpaper-card';
+
+        const isWebM = wallpaper.video_url && wallpaper.video_url.toLowerCase().includes('.webm');
+
         card.innerHTML = `
             <div class="wallpaper-thumbnail">
-                ${wallpaper.thumbnail_url 
-                    ? `<img src="${wallpaper.thumbnail_url}" alt="${wallpaper.title}">` 
-                    : `<video src="${wallpaper.video_url}" muted></video><span class="play-icon">▶</span>`
+                ${wallpaper.thumbnail_url
+                    ? `<img src="${wallpaper.thumbnail_url}" alt="${wallpaper.title}" loading="lazy">`
+                    : `<video src="${wallpaper.video_url}" muted playsinline preload="metadata"></video>
+                       <span class="play-icon">▶</span>`
                 }
+                ${isWebM ? '<span class="format-badge">WebM</span>' : '<span class="format-badge mp4">MP4</span>'}
             </div>
             <div class="wallpaper-info">
                 <div class="wallpaper-title">${wallpaper.title}</div>
@@ -170,175 +298,208 @@ function displayWallpapers(wallpapers) {
         wallpaperContainer.appendChild(card);
     });
 
-    // Add hover effect to play videos
     document.querySelectorAll('.wallpaper-thumbnail video').forEach(video => {
-        video.addEventListener('mouseenter', () => video.play());
-        video.addEventListener('mouseleave', () => {
-            video.pause();
-            video.currentTime = 0;
-        });
+        video.addEventListener('mouseenter', () => video.play().catch(() => {}));
+        video.addEventListener('mouseleave', () => { video.pause(); video.currentTime = 0; });
     });
 }
 
-// Open Video Modal
+// ============================================================
+// Video Modal
+// ============================================================
 function openVideoModal(wallpaper) {
     currentVideoUrl = wallpaper.video_url;
-    
-    // Determine video type
-    const videoType = wallpaper.video_url.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4';
-    
-    // Update video source
+
+    const isWebM = wallpaper.video_url.toLowerCase().includes('.webm');
+    const mime   = isWebM ? 'video/webm' : 'video/mp4';
+
     const source = videoPlayer.querySelector('source');
-    source.src = wallpaper.video_url;
-    source.type = videoType;
-    
-    videoTitle.textContent = wallpaper.title;
+    source.src   = wallpaper.video_url;
+    source.type  = mime;
+
+    videoTitle.textContent    = wallpaper.title;
     videoCategory.textContent = wallpaper.category;
     videoModal.classList.add('active');
     videoPlayer.load();
+    videoPlayer.play().catch(() => {});
 }
 
+// ============================================================
 // Handle Upload
+// ============================================================
 async function handleUpload(e) {
     e.preventDefault();
 
-    const title = document.getElementById('title').value;
-    const category = document.getElementById('category').value;
-    const videoFile = document.getElementById('videoFile').files[0];
+    const title         = document.getElementById('title').value.trim();
+    const category      = document.getElementById('category').value;
+    const videoFile     = document.getElementById('videoFile').files[0];
     const thumbnailFile = document.getElementById('thumbnail').files[0];
+    const skipConvert   = document.getElementById('skipConversion').checked;
 
-    if (!videoFile) {
-        alert('Please select a video file');
-        return;
-    }
+    if (!videoFile) { alert('Vui lòng chọn file video'); return; }
 
-    // Check file type
     const isWebM = videoFile.type === 'video/webm';
-    const isMP4 = videoFile.type === 'video/mp4';
-    const skipConversion = document.getElementById('skipConversion').checked;
-    
+    const isMP4  = videoFile.type === 'video/mp4';
+
     if (!isWebM && !isMP4) {
-        alert('Please select a valid video file (MP4 or WebM)');
+        alert('Chỉ chấp nhận file MP4 hoặc WebM');
         return;
     }
-    
-    // Log conversion settings
-    console.log(`File type: ${isWebM ? 'WebM' : 'MP4'}`);
-    console.log(`Skip conversion: ${skipConversion}`);
 
-    // Show loading
-    const submitBtn = uploadForm.querySelector('button[type="submit"]');
-    const originalText = submitBtn.textContent;
-    submitBtn.textContent = 'Uploading...';
-    submitBtn.disabled = true;
+    // Lock UI
+    submitBtn.disabled    = true;
+    submitBtn.textContent = 'Đang xử lý...';
 
     try {
-        // Show conversion progress if MP4
         let fileToUpload = videoFile;
-        
-        // Convert MP4 to WebM if:
-        // 1. File is MP4
-        // 2. FFmpeg is loaded
-        // 3. User didn't check "skip conversion"
-        if (isMP4 && isFFmpegLoaded && !skipConversion) {
-            submitBtn.textContent = 'Converting to WebM...';
-            fileToUpload = await convertToWebM(videoFile);
-        } else if (isMP4 && skipConversion) {
-            console.log('Skipping conversion as requested by user');
+
+        // Convert MP4 → WebM nếu: file là MP4, FFmpeg sẵn sàng, người dùng không skip
+        if (isMP4 && !skipConvert) {
+            if (isFFmpegLoaded) {
+                showProgress('Đang chuyển đổi MP4 → WebM...');
+                submitBtn.textContent = 'Đang chuyển đổi...';
+                fileToUpload = await convertToWebM(videoFile);
+                hideProgress();
+            } else {
+                console.warn('FFmpeg chưa sẵn sàng, upload MP4 gốc');
+                showToast('FFmpeg chưa load xong, upload file MP4 gốc', 'warning');
+            }
         }
 
-        // Upload video to Supabase Storage
+        // Upload video
+        submitBtn.textContent = 'Đang upload video...';
         const videoFileName = `${Date.now()}-${fileToUpload.name}`;
-        const { data: videoData, error: videoError } = await supabaseClient.storage
+        const { error: videoError } = await supabaseClient.storage
             .from('wallpapers')
-            .upload(videoFileName, fileToUpload, {
-                cacheControl: '3600',
-                upsert: false
-            });
+            .upload(videoFileName, fileToUpload, { cacheControl: '3600', upsert: false });
 
         if (videoError) throw videoError;
 
-        // Get public URL for video
         const { data: { publicUrl: videoUrl } } = supabaseClient.storage
             .from('wallpapers')
             .getPublicUrl(videoFileName);
-        
-        // Log compression info
-        const originalSize = (videoFile.size / (1024 * 1024)).toFixed(2);
-        const uploadedSize = (fileToUpload.size / (1024 * 1024)).toFixed(2);
-        const format = fileToUpload.name.toLowerCase().endsWith('.webm') ? 'WebM (50% smaller)' : 'MP4';
-        
-        console.log(`Video uploaded: ${fileToUpload.name}`);
-        console.log(`Original size: ${originalSize} MB`);
-        console.log(`Uploaded size: ${uploadedSize} MB`);
-        console.log(`Format: ${format}`);
 
-        // Upload thumbnail if provided
+        // Upload thumbnail (nếu có)
         let thumbnailUrl = null;
         if (thumbnailFile) {
-            const thumbnailFileName = `${Date.now()}-${thumbnailFile.name}`;
-            const { data: thumbnailData, error: thumbnailError } = await supabaseClient.storage
+            submitBtn.textContent = 'Đang upload thumbnail...';
+            const thumbName = `${Date.now()}-${thumbnailFile.name}`;
+            const { error: thumbError } = await supabaseClient.storage
                 .from('thumbnails')
-                .upload(thumbnailFileName, thumbnailFile, {
-                    cacheControl: '3600',
-                    upsert: false
-                });
+                .upload(thumbName, thumbnailFile, { cacheControl: '3600', upsert: false });
 
-            if (thumbnailError) throw thumbnailError;
+            if (thumbError) throw thumbError;
 
             const { data: { publicUrl: thumbUrl } } = supabaseClient.storage
                 .from('thumbnails')
-                .getPublicUrl(thumbnailFileName);
+                .getPublicUrl(thumbName);
 
             thumbnailUrl = thumbUrl;
         }
 
-        // Save wallpaper info to database
-        const { data: wallpaperData, error: dbError } = await supabaseClient
+        // Insert DB record
+        const { error: dbError } = await supabaseClient
             .from('wallpapers')
-            .insert([
-                {
-                    title: title,
-                    category: category,
-                    video_url: videoUrl,
-                    thumbnail_url: thumbnailUrl,
-                    user_id: currentUser.id
-                }
-            ]);
+            .insert([{ title, category, video_url: videoUrl, thumbnail_url: thumbnailUrl, user_id: currentUser.id }]);
 
         if (dbError) throw dbError;
 
-        // Success
-        alert('Wallpaper uploaded successfully!');
+        // Log sizes
+        const origMB   = (videoFile.size    / 1024 / 1024).toFixed(1);
+        const uploadMB = (fileToUpload.size / 1024 / 1024).toFixed(1);
+        console.log(`✅ Upload xong!  Gốc: ${origMB}MB → Upload: ${uploadMB}MB`);
+
+        alert('Upload wallpaper thành công! 🎉');
         uploadForm.reset();
+        fileInfo.textContent = '';
         uploadModal.classList.remove('active');
         loadWallpapers();
 
-    } catch (error) {
-        console.error('Error uploading:', error);
-        alert('Error uploading wallpaper. Please try again.');
+    } catch (err) {
+        console.error('Upload error:', err);
+        alert('Lỗi upload: ' + (err.message || err));
     } finally {
-        submitBtn.textContent = originalText;
-        submitBtn.disabled = false;
+        submitBtn.disabled    = false;
+        submitBtn.textContent = 'Upload';
+        hideProgress();
     }
 }
 
-// Handle Login
+// ============================================================
+// FFmpeg WebM Conversion (v0.12 API)
+// ============================================================
+async function convertToWebM(file) {
+    try {
+        const { fetchFile } = await import(FFUTIL_CDN);
+
+        const preset = document.getElementById('compressionPreset').value;
+        const config = PRESETS[preset] || PRESETS.medium;
+
+        const origMB = (file.size / 1024 / 1024).toFixed(1);
+        console.log(`🎬 Converting "${file.name}" (${origMB} MB) — preset: ${config.label}`);
+        console.log(`   CRF=${config.crf}  cpu-used=${config.cpu}`);
+
+        const INPUT  = 'input.mp4';
+        const OUTPUT = 'output.webm';
+
+        await ffmpeg.writeFile(INPUT, await fetchFile(file));
+
+        await ffmpeg.exec([
+            '-i',        INPUT,
+            '-c:v',      'libvpx-vp9',
+            '-crf',      config.crf,
+            '-b:v',      config.b_v,          // '0' = CRF-only mode (không giới hạn bitrate)
+            '-deadline', 'realtime',           // nhanh hơn 'good' / 'best'
+            '-cpu-used', config.cpu,           // 0=slowest+best → 8=fastest+worst
+            '-row-mt',   '1',                  // multi-thread row encoding
+            '-pix_fmt',  'yuv420p',
+            '-c:a',      'libopus',
+            '-b:a',      '96k',
+            '-ac',       '2',
+            '-f',        'webm',
+            OUTPUT,
+        ]);
+
+        const data = await ffmpeg.readFile(OUTPUT);
+
+        // Cleanup WASM FS
+        try { await ffmpeg.deleteFile(INPUT);  } catch (_) {}
+        try { await ffmpeg.deleteFile(OUTPUT); } catch (_) {}
+
+        const webmFile = new File(
+            [data.buffer],
+            file.name.replace(/\.[^.]+$/, '.webm'),
+            { type: 'video/webm' }
+        );
+
+        const webmMB = (webmFile.size / 1024 / 1024).toFixed(1);
+        const saved  = Math.round((1 - webmFile.size / file.size) * 100);
+
+        console.log(`✅ Conversion done!`);
+        console.log(`   MP4 gốc : ${origMB} MB`);
+        console.log(`   WebM    : ${webmMB} MB`);
+        console.log(`   Giảm    : ${saved}%`);
+        showToast(`✅ Chuyển đổi xong! ${origMB}MB → ${webmMB}MB (giảm ${saved}%)`, 'success', 5000);
+
+        return webmFile;
+
+    } catch (err) {
+        console.error('❌ Conversion failed:', err);
+        showToast(`⚠️ Chuyển đổi thất bại: ${err.message}. Sẽ upload MP4 gốc.`, 'warning', 5000);
+        return file;   // fallback: trả về file gốc
+    }
+}
+
+// ============================================================
+// Auth
+// ============================================================
 async function handleLogin(e) {
     e.preventDefault();
-
-    const email = document.getElementById('email').value;
+    const email    = document.getElementById('email').value;
     const password = document.getElementById('password').value;
 
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: email,
-        password: password
-    });
-
-    if (error) {
-        alert('Login failed: ' + error.message);
-        return;
-    }
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) { alert('Đăng nhập thất bại: ' + error.message); return; }
 
     currentUser = data.user;
     updateUIForLoggedInUser();
@@ -346,277 +507,95 @@ async function handleLogin(e) {
     loginForm.reset();
 }
 
-// Handle Signup
 async function handleSignup() {
-    const email = prompt('Enter your email:');
+    const email    = prompt('Nhập email của bạn:');
     if (!email) return;
-
-    const password = prompt('Enter your password:');
+    const password = prompt('Nhập mật khẩu:');
     if (!password) return;
 
-    const { data, error } = await supabaseClient.auth.signUp({
-        email: email,
-        password: password
-    });
-
-    if (error) {
-        alert('Signup failed: ' + error.message);
-        return;
-    }
-
-    alert('Signup successful! Please check your email to verify your account.');
+    const { error } = await supabaseClient.auth.signUp({ email, password });
+    if (error) { alert('Đăng ký thất bại: ' + error.message); return; }
+    alert('Đăng ký thành công! Kiểm tra email để xác nhận tài khoản.');
 }
 
-// Handle Logout
 async function handleLogout() {
     const { error } = await supabaseClient.auth.signOut();
-    if (error) {
-        alert('Logout failed: ' + error.message);
-        return;
-    }
-
+    if (error) { alert('Đăng xuất thất bại: ' + error.message); return; }
     currentUser = null;
     updateUIForLoggedOutUser();
 }
 
-// Update UI for logged in user
 function updateUIForLoggedInUser() {
-    loginBtn.textContent = 'Logout';
-    loginBtn.classList.remove('btn-secondary');
-    loginBtn.classList.add('btn-primary');
+    loginBtn.textContent = 'Đăng xuất';
+    loginBtn.classList.replace('btn-secondary', 'btn-primary');
 }
 
-// Update UI for logged out user
 function updateUIForLoggedOutUser() {
     loginBtn.textContent = 'Login';
-    loginBtn.classList.remove('btn-primary');
-    loginBtn.classList.add('btn-secondary');
+    loginBtn.classList.replace('btn-primary', 'btn-secondary');
 }
 
-// Handle Download
+// ============================================================
+// Download / Share / Like
+// ============================================================
 function handleDownload() {
     if (!currentVideoUrl) return;
-
-    const link = document.createElement('a');
-    link.href = currentVideoUrl;
-    link.download = 'wallpaper.mp4';
-    link.target = '_blank';
+    const link      = document.createElement('a');
+    link.href       = currentVideoUrl;
+    link.download   = 'wallpaper' + (currentVideoUrl.includes('.webm') ? '.webm' : '.mp4');
+    link.target     = '_blank';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
 }
 
-// Handle Share
 function handleShare() {
     if (!currentVideoUrl) return;
-
     const shareData = {
-        title: videoTitle.textContent,
-        text: `Check out this live wallpaper: ${videoTitle.textContent}`,
-        url: currentVideoUrl
+        title : videoTitle.textContent,
+        text  : `Xem live wallpaper: ${videoTitle.textContent}`,
+        url   : currentVideoUrl,
     };
-
-    // Try to use Web Share API (mobile)
     if (navigator.share) {
-        navigator.share(shareData)
-            .then(() => console.log('Shared successfully'))
-            .catch(err => console.log('Share failed:', err));
+        navigator.share(shareData).catch(err => console.log('Share cancelled:', err));
     } else {
-        // Fallback: copy to clipboard
         copyToClipboard(currentVideoUrl);
     }
 }
 
-// Copy to clipboard helper
 function copyToClipboard(text) {
     if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text)
-            .then(() => {
-                alert('Link copied to clipboard!');
-            })
-            .catch(() => {
-                fallbackCopyToClipboard(text);
-            });
+        navigator.clipboard.writeText(text).then(() => alert('Đã copy link!')).catch(() => fallbackCopy(text));
     } else {
-        fallbackCopyToClipboard(text);
+        fallbackCopy(text);
     }
 }
 
-// Fallback copy method for older browsers
-function fallbackCopyToClipboard(text) {
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-999999px';
-    textArea.style.top = '-999999px';
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    
-    try {
-        document.execCommand('copy');
-        alert('Link copied to clipboard!');
-    } catch (err) {
-        alert('Failed to copy link. Please copy manually: ' + text);
-    }
-    
-    document.body.removeChild(textArea);
+function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); alert('Đã copy link!'); }
+    catch (_) { alert('Copy thủ công: ' + text); }
+    document.body.removeChild(ta);
 }
 
-// Initialize FFmpeg for WebM conversion
-async function initFFmpeg() {
-    try {
-        if (typeof FFmpeg !== 'undefined') {
-            const { createFFmpeg, fetchFile } = FFmpeg;
-            ffmpeg = createFFmpeg({ 
-                log: true,
-                progress: ({ ratio }) => {
-                    const percent = Math.round(ratio * 100);
-                    console.log(`Converting: ${percent}%`);
-                }
-            });
-            
-            console.log('FFmpeg loaded, ready to convert MP4 to WebM');
-            isFFmpegLoaded = true;
-        } else {
-            console.warn('FFmpeg not loaded, WebM conversion will use server-side only');
-        }
-    } catch (error) {
-        console.error('Error loading FFmpeg:', error);
-    }
-}
-
-// Convert MP4 to WebM using FFmpeg WASM with presets
-async function convertToWebM(file) {
-    if (!isFFmpegLoaded || !ffmpeg) {
-        console.log('FFmpeg not available, using original file');
-        return file;
-    }
-
-    try {
-        console.log('Converting MP4 to WebM...');
-        
-        // Get compression preset
-        const preset = document.getElementById('compressionPreset').value;
-        
-        // Configure compression based on preset
-        // Target: 100MB MP4 → X MB WebM
-        const presets = {
-            low: { crf: 20, bitrate: '8M', maxrate: '10M', bufsize: '16M', name: 'Low (5-10MB)' },      // 90-95% compression
-            medium: { crf: 30, bitrate: '2M', maxrate: '3M', bufsize: '6M', name: 'Medium (15-25MB)' }, // 75-85% compression
-            high: { crf: 40, bitrate: '1M', maxrate: '1.5M', bufsize: '3M', name: 'High (30-50MB)' }   // 50-70% compression
-        };
-        
-        const config = presets[preset] || presets.medium;
-        
-        console.log(`Using preset: ${config.name}`);
-        console.log(`CRF: ${config.crf}, Bitrate: ${config.bitrate}`);
-        
-        const { createFFmpeg, fetchFile } = FFmpeg;
-        
-        // Load FFmpeg if not loaded
-        if (!ffmpeg.isLoaded()) {
-            await ffmpeg.load();
-        }
-
-        // Write input file
-        ffmpeg.FS('writeFile', file.name, await fetchFile(file));
-
-        // Convert to WebM with VP9 using selected preset
-        await ffmpeg.run(
-            '-i', file.name,
-            '-c:v', 'libvpx-vp9',
-            '-crf', config.crf,
-            '-b:v', config.bitrate,
-            '-maxrate', config.maxrate,
-            '-bufsize', config.bufsize,
-            '-pix_fmt', 'yuv420p',
-            '-c:a', 'libopus',
-            '-b:a', '128k',
-            '-ac', '2',
-            '-ar', '44100',
-            'output.webm'
-        );
-
-        // Read output file
-        const data = ffmpeg.FS('readFile', 'output.webm');
-        
-        // Create new file
-        const webmFile = new File([data.buffer], file.name.replace(/\.[^/.]+$/, '.webm'), {
-            type: 'video/webm'
-        });
-
-        // Cleanup
-        ffmpeg.FS('unlink', file.name);
-        ffmpeg.FS('unlink', 'output.webm');
-
-        const originalSize = (file.size / (1024 * 1024)).toFixed(2);
-        const webmSize = (webmFile.size / (1024 * 1024)).toFixed(2);
-        const saved = Math.round((1 - webmFile.size / file.size) * 100);
-        
-        console.log(`✓ Conversion complete!`);
-        console.log(`  Original: ${originalSize} MB (MP4)`);
-        console.log(`  WebM: ${webmSize} MB`);
-        console.log(`  Saved: ${saved}%`);
-        console.log(`  Preset: ${config.name}`);
-
-        return webmFile;
-    } catch (error) {
-        console.error('Error converting to WebM:', error);
-        alert('WebM conversion failed, uploading original MP4');
-        return file;
-    }
-}
-
-// Handle Like
 async function handleLike() {
-    if (!currentUser) {
-        alert('Please login to like wallpapers');
-        return;
-    }
-
-    // Implement like functionality
-    alert('Like feature coming soon!');
+    if (!currentUser) { alert('Vui lòng đăng nhập để like'); return; }
+    alert('Tính năng like sắp ra mắt!');
 }
 
-// Format Date
+// ============================================================
+// Utils
+// ============================================================
 function formatDate(dateString) {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffTime = Math.abs(now - date);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 1) return '1 day ago';
-    if (diffDays < 7) return `${diffDays} days ago`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-    return date.toLocaleDateString();
+    const date     = new Date(dateString);
+    const diffDays = Math.ceil(Math.abs(new Date() - date) / 86400000);
+    if (diffDays === 1)  return '1 ngày trước';
+    if (diffDays < 7)   return `${diffDays} ngày trước`;
+    if (diffDays < 30)  return `${Math.floor(diffDays / 7)} tuần trước`;
+    return date.toLocaleDateString('vi-VN');
 }
-
-// Supabase Setup Instructions
-console.log(`
-╔════════════════════════════════════════════════════════════╗
-║  Supabase Setup Required                                    ║
-╠════════════════════════════════════════════════════════════╣
-║  1. Go to https://supabase.com and create a new project    ║
-║  2. Get your project URL and anon key from Settings > API  ║
-║  3. Replace the values in app.js at the top                ║
-║  4. Create the following tables in Supabase SQL Editor:     ║
-║                                                             ║
-║  CREATE TABLE wallpapers (                                  ║
-║    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,          ║
-║    title TEXT NOT NULL,                                     ║
-║    category TEXT NOT NULL,                                  ║
-║    video_url TEXT NOT NULL,                                 ║
-║    thumbnail_url TEXT,                                      ║
-║    user_id UUID REFERENCES auth.users(id),                  ║
-║    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),       ║
-║    likes INTEGER DEFAULT 0                                 ║
-║  );                                                         ║
-║                                                             ║
-║  5. Create Storage buckets:                                 ║
-║     - wallpapers (for MP4 videos)                           ║
-║     - thumbnails (for thumbnail images)                     ║
-║                                                             ║
-║  6. Set Storage policies to allow public read access        ║
-╚════════════════════════════════════════════════════════════╝
-`);
