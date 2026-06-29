@@ -1,37 +1,6 @@
 // Supabase Configuration
-const SUPABASE_URL = 'https://udaniwuafagvftgsnslb.supabase.co'; // Replace with your Supabase URL
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVkYW5pd3VhZmFndmZ0Z3Nuc2xiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NDUwNTUsImV4cCI6MjA5ODIyMTA1NX0.uqDko_JfAJIhzs1NcU2ygbW6cYKt26f2w3lf4ngwkKY'; // Replace with your Supabase anon key
-
-// Validate configuration
-if (SUPABASE_URL === 'https://udaniwuafagvftgsnslb.supabase.co' || SUPABASE_ANON_KEY === 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVkYW5pd3VhZmFndmZ0Z3Nuc2xiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NDUwNTUsImV4cCI6MjA5ODIyMTA1NX0.uqDko_JfAJIhzs1NcU2ygbW6cYKt26f2w3lf4ngwkKY') {
-    console.error(`
-╔════════════════════════════════════════════════════════════╗
-║  CONFIGURATION REQUIRED                                    ║
-╠════════════════════════════════════════════════════════════╣
-║  Please update app.js with your Supabase credentials:      ║
-║  1. Get your Project URL from Supabase Dashboard           ║
-║  2. Get your anon/public key from Settings > API           ║
-║  3. Replace the placeholder values at the top of app.js    ║
-╚════════════════════════════════════════════════════════════╝
-    `);
-    document.body.innerHTML = `
-        <div style="max-width: 800px; margin: 100px auto; padding: 40px; font-family: Arial, sans-serif; text-align: center;">
-            <h1 style="color: #2563eb;">Live Wallpaper Community</h1>
-            <div style="background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 8px; padding: 30px; margin-top: 30px;">
-                <h2 style="color: #0f172a;">⚠️ Configuration Required</h2>
-                <p style="color: #475569; margin: 20px 0;">Please configure your Supabase credentials in <code>app.js</code></p>
-                <ol style="text-align: left; color: #475569; line-height: 2;">
-                    <li>Go to <a href="https://supabase.com" target="_blank">supabase.com</a> and create a project</li>
-                    <li>Copy your Project URL and anon key from Settings → API</li>
-                    <li>Open <code>app.js</code> and replace the placeholder values</li>
-                    <li>Save and refresh this page</li>
-                </ol>
-                <p style="color: #64748b; margin-top: 20px; font-size: 14px;">See QUICKSTART.md for detailed instructions</p>
-            </div>
-        </div>
-    `;
-    throw new Error('Supabase credentials not configured. Please update app.js with your Project URL and anon key.');
-}
+const SUPABASE_URL = 'https://udaniwuafagvftgsnslb.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVkYW5pd3VhZmFndmZ0Z3Nuc2xiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2NDUwNTUsImV4cCI6MjA5ODIyMTA1NX0.uqDko_JfAJIhzs1NcU2ygbW6cYKt26f2w3lf4ngwkKY';
 
 // Create Supabase client (use different variable name to avoid conflict)
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
